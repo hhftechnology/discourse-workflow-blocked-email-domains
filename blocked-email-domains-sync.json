@@ -1,0 +1,257 @@
+{
+  "name": "Blocked email domains sync",
+  "nodes": [
+    {
+      "id": "2699874e-9cd9-46cd-bc44-ad888d42bf85",
+      "type": "trigger:schedule",
+      "typeVersion": "1.0",
+      "name": "Monday 04:30",
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "30 4 * * 1"
+            }
+          ]
+        }
+      },
+      "credentials": {},
+      "webhookId": null,
+      "position": {
+        "x": 200,
+        "y": 400
+      }
+    },
+    {
+      "id": "6aec9c7e-04e8-4d61-a5cf-07bc94b00ea1",
+      "type": "action:http_request",
+      "typeVersion": "1.0",
+      "name": "Fetch upstream list",
+      "parameters": {
+        "url": "https://raw.githubusercontent.com/disposable-email-domains/disposable-email-domains/main/disposable_email_blocklist.conf",
+        "method": "GET",
+        "headers": {
+          "values": [
+            {
+              "key": "User-Agent",
+              "value": "discourse-workflow-blocked-email-domains"
+            }
+          ]
+        },
+        "never_error": false,
+        "full_response": false,
+        "authentication": "none",
+        "max_response_size_kb": 2048
+      },
+      "credentials": {},
+      "webhookId": null,
+      "position": {
+        "x": 400,
+        "y": 400
+      },
+      "notes": "",
+      "notesInFlow": false,
+      "alwaysOutputData": false
+    },
+    {
+      "id": "48231c22-0e19-44d4-8088-0d6545d6177c",
+      "type": "action:code",
+      "typeVersion": "1.0",
+      "name": "Build list",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "code": "// Build list for blocked_email_domains.\n// upstream (lowercase, trimmed, no blanks/comments) + EXTRAS - EXCLUDE - SAFE,\n// valid hostnames only, de-duplicated, sorted, joined with '|'.\n// Throws (so nothing is written; wire an error workflow to get alerted) if the download looks wrong.\nvar MIN_UPSTREAM = 5000;\nvar MAX_BYTES = 2048 * 1024;   // must match \"Max response size (KB)\" on the fetch node\n\n// Optional domains you want blocked on top of upstream. Example:\n// var EXTRAS = ['typo-domain.example', 'another.example'];\nvar EXTRAS = [];\n\n// Never block these, even if upstream lists them (privacy alias services).\nvar EXCLUDE = ['simplelogin.com', 'passmail.net'];\n\n// Major providers — never block, even if upstream lists them.\nvar SAFE = ['gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'live.com', 'yahoo.com', 'icloud.com', 'me.com',\n  'proton.me', 'protonmail.com', 'aol.com', 'gmx.com', 'zoho.com', 'yandex.com'];\nvar OK = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;\n\nvar src = $input.all()[0].json || {};\nvar body = src.data;\nif (typeof body !== 'string') throw new Error('Upstream download was not plain text');\nif (body.length >= MAX_BYTES) throw new Error('Upstream download hit the size cap (' + body.length + ' bytes), probably truncated; nothing written');\nvar up = {}, upCount = 0;\nbody.split(/\\r\\n|[\\n\\r\\v\\f\\x1c\\x1d\\x1e\\x85\\u2028\\u2029]/).forEach(function (l) {\n  var t = l.trim();\n  if (!t || l.charAt(0) === '#') return;\n  upCount++; up[t.toLowerCase()] = 1;\n});\nif (upCount < MIN_UPSTREAM) throw new Error('Upstream list suspiciously small (' + upCount + ' entries); nothing written');\nEXTRAS.forEach(function (d) { up[d] = 1; });\nEXCLUDE.forEach(function (d) { delete up[d]; });\nvar guarded = [], bad = [], want = [];\nSAFE.forEach(function (d) { if (up[d]) { guarded.push(d); delete up[d]; } });\nObject.keys(up).forEach(function (d) { if (OK.test(d)) want.push(d); else bad.push(d); });\nwant.sort();\nvar curRaw = String($site_settings.blocked_email_domains || '');\nvar parts = curRaw.split('|'), cur = {}, clean = true;\nparts.forEach(function (x) { var t = x.trim(); if (t !== x) clean = false; if (t) cur[t.toLowerCase()] = 1; });\nvar wantSet = {}; want.forEach(function (d) { wantSet[d] = 1; });\nvar added = want.filter(function (d) { return !cur[d]; });\nvar removed = Object.keys(cur).filter(function (d) { return !wantSet[d]; }).sort();\nvar changed = (added.length || removed.length || !clean) ? 1 : 0;\nreturn [{ json: {\n  changed: changed, value: want.join('|'), total: want.length, before: Object.keys(cur).length,\n  upstream: upCount, added: added.length, removed: removed.length, was_clean: clean,\n  added_sample: added.slice(0, 10), removed_sample: removed.slice(0, 10),\n  invalid_skipped: bad.slice(0, 20), guarded_major_providers: guarded\n} }];\n"
+      },
+      "credentials": {},
+      "webhookId": null,
+      "position": {
+        "x": 600,
+        "y": 400
+      },
+      "notes": "",
+      "notesInFlow": false,
+      "alwaysOutputData": false
+    },
+    {
+      "id": "c5bf8a09-c6d0-407b-ae03-54f025443633",
+      "type": "condition:if",
+      "typeVersion": "1.0",
+      "name": "Changed?",
+      "parameters": {
+        "combinator": "and",
+        "conditions": [
+          {
+            "id": "33b9a13e-7800-4cc7-a563-f231a156aef4",
+            "operator": {
+              "type": "number",
+              "operation": "gt",
+              "singleValue": false
+            },
+            "leftValue": "={{ $json.changed }}",
+            "rightValue": "0"
+          }
+        ]
+      },
+      "credentials": {},
+      "webhookId": null,
+      "position": {
+        "x": 800,
+        "y": 400
+      },
+      "notes": "",
+      "notesInFlow": false,
+      "alwaysOutputData": false
+    },
+    {
+      "id": "9e860a90-2fdb-414c-81be-a6de64d26241",
+      "type": "action:site_setting",
+      "typeVersion": "1.0",
+      "name": "Save blocked_email_domains",
+      "parameters": {
+        "name": "blocked_email_domains",
+        "value": "={{ $json.value }}",
+        "actor_username": "system"
+      },
+      "credentials": {},
+      "webhookId": null,
+      "position": {
+        "x": 1000,
+        "y": 320
+      },
+      "notes": "",
+      "notesInFlow": false,
+      "alwaysOutputData": false
+    },
+    {
+      "id": "d41720ce-3807-4416-ac87-b50680344354",
+      "type": "action:code",
+      "typeVersion": "1.0",
+      "name": "Verify",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "code": "// Verify. Reads the setting value the Site setting step saved and compares it with what Build list produced.\nvar saved = $input.all()[0].json || {};\nvar b = $('Build list').first().json;\nif (saved.value !== b.value) throw new Error('Verify failed: saved blocked_email_domains differs from the built list (' + String(saved.value || '').split('|').length + ' vs ' + b.total + ')');\nvar msg = '🧹 Blocked email domains synced: +' + b.added + ' added, −' + b.removed + ' removed, total ' + b.total + ' (was ' + b.before + ').';\nif (b.added_sample.length) msg += '\\nAdded e.g.: ' + b.added_sample.join(', ');\nif (b.removed_sample.length) msg += '\\nRemoved e.g.: ' + b.removed_sample.join(', ');\nif (!b.was_clean) msg += '\\nAlso cleaned stray whitespace in the old value.';\nif (b.guarded_major_providers.length) msg += '\\nUpstream listed major providers, kept unblocked: ' + b.guarded_major_providers.join(', ');\nif (b.invalid_skipped.length) msg += '\\nSkipped invalid entries: ' + b.invalid_skipped.join(', ');\nreturn [{ json: { verified: 1, total: b.total, added: b.added, removed: b.removed, message: msg } }];\n"
+      },
+      "credentials": {},
+      "webhookId": null,
+      "position": {
+        "x": 1200,
+        "y": 320
+      },
+      "notes": "",
+      "notesInFlow": false,
+      "alwaysOutputData": false
+    },
+    {
+      "id": "f04b66b5-3fe5-4940-8734-84d680a044fb",
+      "type": "action:send_chat_message",
+      "typeVersion": "1.0",
+      "name": "Alert: list changed",
+      "parameters": {
+        "target": "channel",
+        "message": "={{ $json.message }}",
+        "channel_id": "={{ $vars.alerts_channel }}"
+      },
+      "credentials": {},
+      "webhookId": null,
+      "position": {
+        "x": 1400,
+        "y": 320
+      },
+      "notes": "",
+      "notesInFlow": false,
+      "alwaysOutputData": false
+    },
+    {
+      "id": "1a107a97-8cb1-48b6-8c0a-e31918afed1c",
+      "type": "flow:sticky_note",
+      "typeVersion": "1.0",
+      "name": "Sticky note",
+      "parameters": {
+        "content": "## Setup (do this before publishing)\n\n1. **Alerts channel (optional).** The Alert node posts to the global variable `$vars.alerts_channel` (a chat channel id). Create that variable under Workflows → Variables, or delete the **Alert: list changed** node if you do not want chat alerts.\n2. **Edit EXTRAS / EXCLUDE / SAFE** at the top of the **Build list** code node. EXTRAS starts empty — add any domains you want blocked on top of upstream. EXCLUDE keeps simplelogin.com and passmail.net unblocked by default. SAFE never blocks major providers (Gmail, Outlook, …).\n3. **Error workflow (optional).** In Settings, point Error workflow at a workflow that has an error trigger, so a failed run alerts you.\n4. **Timezone.** Schedule cron runs in this workflow's timezone (Settings → Timezone). The default cron is `30 4 * * 1` (Monday 04:30). Change the expression or the timezone to match your local Monday morning.\n5. **Run once by hand** (⋮ → Execute workflow) and check Executions. The first run can add thousands of domains to `blocked_email_domains`.\n6. **Publish** when the dry run looks right.\n\nThe setting is visible under Admin → Settings → `blocked_email_domains`. Upstream list: https://github.com/disposable-email-domains/disposable-email-domains (not bundled in this file).\n",
+        "width": 560,
+        "height": 420,
+        "color": "yellow"
+      },
+      "credentials": {},
+      "webhookId": null,
+      "position": {
+        "x": 40,
+        "y": -40
+      }
+    }
+  ],
+  "connections": {
+    "Monday 04:30": {
+      "main": [
+        [
+          {
+            "node": "Fetch upstream list",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch upstream list": {
+      "main": [
+        [
+          {
+            "node": "Build list",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build list": {
+      "main": [
+        [
+          {
+            "node": "Changed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Changed?": {
+      "main": [
+        [
+          {
+            "node": "Save blocked_email_domains",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save blocked_email_domains": {
+      "main": [
+        [
+          {
+            "node": "Verify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify": {
+      "main": [
+        [
+          {
+            "node": "Alert: list changed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "timezone": "UTC"
+  },
+  "variables": [],
+  "staticData": {}
+}
